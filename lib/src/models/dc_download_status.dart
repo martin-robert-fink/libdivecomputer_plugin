@@ -16,10 +16,6 @@ enum DcDownloadStatus {
   error;
 
   /// The libdivecomputer error code if [this] is [error], or `null`.
-  ///
-  /// This is populated from the native status string format `"error(N)"`.
-  /// Access it via [DcDownloadProgress.errorCode] for convenience.
-  static final _errorPattern = RegExp(r'^error\((-?\d+)\)$');
 
   /// Parses the status string sent from the native side.
   ///
@@ -30,7 +26,7 @@ enum DcDownloadStatus {
       'success' => DcDownloadStatus.success,
       'done' => DcDownloadStatus.done,
       'cancelled' => DcDownloadStatus.cancelled,
-      _ when _errorPattern.hasMatch(value) => DcDownloadStatus.error,
+      _ when value.startsWith('error') => DcDownloadStatus.error,
       _ => DcDownloadStatus.error,
     };
   }
@@ -38,10 +34,11 @@ enum DcDownloadStatus {
   /// Extracts the integer error code from a native status string like
   /// `"error(-7)"`. Returns `null` for non-error statuses.
   static int? errorCodeFromNative(String? value) {
-    if (value == null) return null;
-    final match = _errorPattern.firstMatch(value);
-    if (match == null) return null;
-    return int.tryParse(match.group(1)!);
+    if (value == null || !value.startsWith('error(')) return null;
+    final start = value.indexOf('(');
+    final end = value.indexOf(')');
+    if (start < 0 || end < 0 || end <= start + 1) return null;
+    return int.tryParse(value.substring(start + 1, end));
   }
 
   /// Whether this represents a successful completion.
