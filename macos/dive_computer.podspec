@@ -7,7 +7,7 @@ A Flutter plugin that provides native communication with dive computers
 using the libdivecomputer library. Uses CoreBluetooth for BLE transport
 on macOS.
                        DESC
-  s.homepage         = 'https://github.com/yourusername/dive_computer'
+  s.homepage         = 'https://github.com/martin-robert-fink/dive_computer'
   s.license          = { :file => '../LICENSE' }
   s.author           = { 'Your Name' => 'your@email.com' }
   s.source           = { :path => '.' }
