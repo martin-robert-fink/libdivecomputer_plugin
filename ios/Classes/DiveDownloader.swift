@@ -25,16 +25,22 @@ struct DownloadProgress {
     }
 }
 
+/// Raw dive data stored during download, parsed after BLE transfer completes.
+private struct RawDiveData {
+    let data: Data
+    let fingerprint: Data?
+}
+
 /// Manages the dive download process using libdivecomputer's
 /// dc_device_foreach and dc_parser APIs. Runs entirely on a
 /// background DispatchQueue to avoid blocking the main thread.
 ///
 /// Design (matching Subsurface):
-/// - All BLE and parsing work happens on a background thread
+/// - All BLE work happens on a background thread with NO parsing
+/// - Raw dive bytes are stored in memory during download
+/// - Parsing happens AFTER dc_device_foreach completes (BLE is done)
 /// - Progress is written to shared properties (no main queue dispatches)
 /// - The UI polls progress via a MethodChannel timer
-/// - Full dive data is stored in memory and retrieved after download completes
-/// - This eliminates all main queue work during BLE communication
 class DiveDownloader {
 
     private let device: OpaquePointer     // dc_device_t*
@@ -53,8 +59,10 @@ class DiveDownloader {
     private var _isActive: Bool = true
     private var _status: String? = nil
 
-    /// Full parsed dive data, accumulated during download.
-    /// Only accessed after download completes, so no lock needed for reads.
+    /// Raw dive data accumulated during download (pre-parsing).
+    private var _rawDives: [RawDiveData] = []
+
+    /// Full parsed dive data, populated after download completes.
     private var _downloadedDives: [[String: Any]] = []
 
     fileprivate var isCancelled = false
@@ -168,7 +176,7 @@ class DiveDownloader {
         // Set cancel callback
         dc_device_set_cancel(device, deviceCancelCallback, selfPtr)
 
-        // Enumerate dives
+        // Enumerate dives — raw bytes only, NO parsing during BLE transfer
         let status = dc_device_foreach(device, diveCallback, selfPtr)
 
         let statusName: String
@@ -178,7 +186,236 @@ class DiveDownloader {
         default:                statusName = "error(\(status.rawValue))"
         }
 
+        NSLog("[DiveDownloader] BLE transfer complete (\(statusName)), parsing \(_rawDives.count) dives...")
+
+        // Parse all dives AFTER BLE transfer is complete
+        parseAllDives()
+
         finish(status: statusName)
+    }
+
+    // MARK: - Raw Dive Storage (called during BLE download)
+
+    /// Stores raw dive bytes during download. No parsing happens here.
+    fileprivate func storeRawDive(data: UnsafePointer<UInt8>, size: UInt32,
+                                   fingerprint: UnsafePointer<UInt8>?, fpSize: UInt32) -> Bool {
+
+        stateLock.lock()
+        _diveCount += 1
+        let diveNumber = _diveCount
+        stateLock.unlock()
+
+        // Estimate total dives when the first dive arrives
+        if diveNumber == 1 && lastProgressMaximum > 0 {
+            let totalSteps = lastProgressMaximum / 10000
+            if totalSteps > 0 {
+                updateEstimatedTotal(totalSteps)
+                NSLog("[DiveDownloader] Estimated total dives: ~\(totalSteps) (from progress max=\(lastProgressMaximum))")
+            }
+        }
+
+        // Save fingerprint from the first (newest) dive
+        let fpData: Data?
+        if let fp = fingerprint, fpSize > 0 {
+            fpData = Data(bytes: fp, count: Int(fpSize))
+        } else {
+            fpData = nil
+        }
+
+        if diveNumber == 1, let fpData = fpData {
+            stateLock.lock()
+            let serial = _serial
+            stateLock.unlock()
+
+            if let serial = serial {
+                saveFingerprint(fpData, serial: serial)
+            }
+        }
+
+        // Store raw bytes — parsing deferred until after download
+        let rawData = Data(bytes: data, count: Int(size))
+        _rawDives.append(RawDiveData(data: rawData, fingerprint: fpData))
+
+        NSLog("[DiveDownloader] Stored raw dive #\(diveNumber) (\(size) bytes)")
+        return true
+    }
+
+    // MARK: - Deferred Parsing (runs after BLE transfer completes)
+
+    private func parseAllDives() {
+        stateLock.lock()
+        let total = _estimatedTotalDives
+        stateLock.unlock()
+
+        for (index, rawDive) in _rawDives.enumerated() {
+            let diveNumber = index + 1
+
+            var parser: OpaquePointer?
+            let status = rawDive.data.withUnsafeBytes { ptr -> dc_status_t in
+                guard let baseAddress = ptr.baseAddress else { return DC_STATUS_INVALIDARGS }
+                return dc_parser_new(&parser, device,
+                                     baseAddress.assumingMemoryBound(to: UInt8.self),
+                                     rawDive.data.count)
+            }
+
+            guard status == DC_STATUS_SUCCESS, let parser = parser else {
+                NSLog("[DiveDownloader] Failed to create parser for dive \(diveNumber): \(status.rawValue)")
+                _downloadedDives.append([
+                    "number": diveNumber,
+                    "error": "Parser creation failed (\(status.rawValue))",
+                ])
+                continue
+            }
+
+            defer { dc_parser_destroy(parser) }
+
+            var diveEvent: [String: Any] = [
+                "number": diveNumber,
+            ]
+
+            if let total = total {
+                diveEvent["totalDives"] = total
+            }
+
+            // DateTime
+            var datetime = dc_datetime_t()
+            if dc_parser_get_datetime(parser, &datetime) == DC_STATUS_SUCCESS {
+                let dateStr = String(format: "%04d-%02d-%02dT%02d:%02d:%02d",
+                                     datetime.year, datetime.month, datetime.day,
+                                     datetime.hour, datetime.minute, datetime.second)
+                diveEvent["dateTime"] = dateStr
+            }
+
+            // Dive time (seconds)
+            var divetime: UInt32 = 0
+            if dc_parser_get_field(parser, DC_FIELD_DIVETIME, 0, &divetime) == DC_STATUS_SUCCESS {
+                diveEvent["diveTime"] = Int(divetime)
+            }
+
+            // Max depth (meters)
+            var maxdepth: Double = 0
+            if dc_parser_get_field(parser, DC_FIELD_MAXDEPTH, 0, &maxdepth) == DC_STATUS_SUCCESS {
+                diveEvent["maxDepth"] = maxdepth
+            }
+
+            // Avg depth (meters)
+            var avgdepth: Double = 0
+            if dc_parser_get_field(parser, DC_FIELD_AVGDEPTH, 0, &avgdepth) == DC_STATUS_SUCCESS {
+                diveEvent["avgDepth"] = avgdepth
+            }
+
+            // Temperature (minimum)
+            var minTemp: Double = 0
+            if dc_parser_get_field(parser, DC_FIELD_TEMPERATURE_MINIMUM, 0, &minTemp) == DC_STATUS_SUCCESS {
+                diveEvent["minTemperature"] = minTemp
+            }
+
+            // Temperature (maximum)
+            var maxTemp: Double = 0
+            if dc_parser_get_field(parser, DC_FIELD_TEMPERATURE_MAXIMUM, 0, &maxTemp) == DC_STATUS_SUCCESS {
+                diveEvent["maxTemperature"] = maxTemp
+            }
+
+            // Surface temperature
+            var surfTemp: Double = 0
+            if dc_parser_get_field(parser, DC_FIELD_TEMPERATURE_SURFACE, 0, &surfTemp) == DC_STATUS_SUCCESS {
+                diveEvent["surfaceTemperature"] = surfTemp
+            }
+
+            // Dive mode
+            var divemode = DC_DIVEMODE_OC
+            if dc_parser_get_field(parser, DC_FIELD_DIVEMODE, 0, &divemode) == DC_STATUS_SUCCESS {
+                let modeStr: String
+                switch divemode {
+                case DC_DIVEMODE_FREEDIVE: modeStr = "freedive"
+                case DC_DIVEMODE_GAUGE:    modeStr = "gauge"
+                case DC_DIVEMODE_OC:       modeStr = "OC"
+                case DC_DIVEMODE_CCR:      modeStr = "CCR"
+                case DC_DIVEMODE_SCR:      modeStr = "SCR"
+                default:                   modeStr = "unknown"
+                }
+                diveEvent["diveMode"] = modeStr
+            }
+
+            // Atmospheric pressure
+            var atmospheric: Double = 0
+            if dc_parser_get_field(parser, DC_FIELD_ATMOSPHERIC, 0, &atmospheric) == DC_STATUS_SUCCESS {
+                diveEvent["atmospheric"] = atmospheric
+            }
+
+            // Gas mixes
+            var gasmixCount: UInt32 = 0
+            if dc_parser_get_field(parser, DC_FIELD_GASMIX_COUNT, 0, &gasmixCount) == DC_STATUS_SUCCESS,
+               gasmixCount > 0 {
+                var mixes: [[String: Any]] = []
+                for i in 0..<gasmixCount {
+                    var gasmix = dc_gasmix_t()
+                    if dc_parser_get_field(parser, DC_FIELD_GASMIX, i, &gasmix) == DC_STATUS_SUCCESS {
+                        mixes.append([
+                            "oxygen": gasmix.oxygen,
+                            "helium": gasmix.helium,
+                            "nitrogen": gasmix.nitrogen,
+                        ])
+                    }
+                }
+                if !mixes.isEmpty {
+                    diveEvent["gasMixes"] = mixes
+                }
+            }
+
+            // Tank info
+            var tankCount: UInt32 = 0
+            if dc_parser_get_field(parser, DC_FIELD_TANK_COUNT, 0, &tankCount) == DC_STATUS_SUCCESS,
+               tankCount > 0 {
+                var tanks: [[String: Any]] = []
+                for i in 0..<tankCount {
+                    var tank = dc_tank_t()
+                    if dc_parser_get_field(parser, DC_FIELD_TANK, i, &tank) == DC_STATUS_SUCCESS {
+                        var tankMap: [String: Any] = [
+                            "beginPressure": tank.beginpressure,
+                            "endPressure": tank.endpressure,
+                        ]
+                        if tank.volume > 0 {
+                            tankMap["volume"] = tank.volume
+                        }
+                        if tank.workpressure > 0 {
+                            tankMap["workPressure"] = tank.workpressure
+                        }
+                        if tank.gasmix != DC_GASMIX_UNKNOWN {
+                            tankMap["gasmix"] = Int(tank.gasmix)
+                        }
+                        tanks.append(tankMap)
+                    }
+                }
+                if !tanks.isEmpty {
+                    diveEvent["tanks"] = tanks
+                }
+            }
+
+            // Depth profile samples
+            let sampleCollector = SampleCollector()
+            let samplePtr = Unmanaged.passUnretained(sampleCollector).toOpaque()
+            dc_parser_samples_foreach(parser, sampleCallback, samplePtr)
+            sampleCollector.flush()
+
+            if !sampleCollector.samples.isEmpty {
+                diveEvent["samples"] = sampleCollector.samples
+                diveEvent["sampleCount"] = sampleCollector.samples.count
+            }
+
+            // Fingerprint
+            if let fpData = rawDive.fingerprint {
+                diveEvent["fingerprint"] = fpData.map { String(format: "%02x", $0) }.joined()
+            }
+
+            NSLog("[DiveDownloader] Parsed dive #\(diveNumber)\(total != nil ? "/\(total!)" : ""): " +
+                  "depth=\(diveEvent["maxDepth"] ?? "?")m, " +
+                  "time=\(diveEvent["diveTime"] ?? "?")s, samples=\(sampleCollector.samples.count)")
+
+            _downloadedDives.append(diveEvent)
+        }
+
+        NSLog("[DiveDownloader] Parsing complete: \(_downloadedDives.count) dives parsed")
     }
 
     // MARK: - Fingerprint Persistence
@@ -213,202 +450,6 @@ class DiveDownloader {
     fileprivate func saveFingerprint(_ data: Data, serial: UInt32) {
         FingerprintStore.save(serial: serial, fingerprint: data)
         NSLog("[DiveDownloader] Saved fingerprint for serial \(serial): \(data.map { String(format: "%02x", $0) }.joined())")
-    }
-
-    // MARK: - Dive Parsing
-
-    fileprivate func processDive(data: UnsafePointer<UInt8>, size: UInt32,
-                                  fingerprint: UnsafePointer<UInt8>?, fpSize: UInt32) -> Bool {
-
-        stateLock.lock()
-        _diveCount += 1
-        let diveNumber = _diveCount
-        stateLock.unlock()
-
-        // Estimate total dives when the first dive arrives
-        if diveNumber == 1 && lastProgressMaximum > 0 {
-            let totalSteps = lastProgressMaximum / 10000
-            if totalSteps > 0 {
-                updateEstimatedTotal(totalSteps)
-                NSLog("[DiveDownloader] Estimated total dives: ~\(totalSteps) (from progress max=\(lastProgressMaximum))")
-            }
-        }
-
-        // Save fingerprint from the first (newest) dive
-        stateLock.lock()
-        let serial = _serial
-        stateLock.unlock()
-
-        if diveNumber == 1, let fp = fingerprint, fpSize > 0, let serial = serial {
-            let fpData = Data(bytes: fp, count: Int(fpSize))
-            saveFingerprint(fpData, serial: serial)
-        }
-
-        var parser: OpaquePointer?
-        let status = dc_parser_new(&parser, device, data, Int(size))
-
-        guard status == DC_STATUS_SUCCESS, let parser = parser else {
-            NSLog("[DiveDownloader] Failed to create parser for dive \(diveNumber): \(status.rawValue)")
-            _downloadedDives.append([
-                "number": diveNumber,
-                "error": "Parser creation failed (\(status.rawValue))",
-            ])
-            return true
-        }
-
-        defer { dc_parser_destroy(parser) }
-
-        var diveEvent: [String: Any] = [
-            "number": diveNumber,
-        ]
-
-        stateLock.lock()
-        let total = _estimatedTotalDives
-        stateLock.unlock()
-
-        if let total = total {
-            diveEvent["totalDives"] = total
-        }
-
-        // DateTime
-        var datetime = dc_datetime_t()
-        if dc_parser_get_datetime(parser, &datetime) == DC_STATUS_SUCCESS {
-            let dateStr = String(format: "%04d-%02d-%02dT%02d:%02d:%02d",
-                                 datetime.year, datetime.month, datetime.day,
-                                 datetime.hour, datetime.minute, datetime.second)
-            diveEvent["dateTime"] = dateStr
-        }
-
-        // Dive time (seconds)
-        var divetime: UInt32 = 0
-        if dc_parser_get_field(parser, DC_FIELD_DIVETIME, 0, &divetime) == DC_STATUS_SUCCESS {
-            diveEvent["diveTime"] = Int(divetime)
-        }
-
-        // Max depth (meters)
-        var maxdepth: Double = 0
-        if dc_parser_get_field(parser, DC_FIELD_MAXDEPTH, 0, &maxdepth) == DC_STATUS_SUCCESS {
-            diveEvent["maxDepth"] = maxdepth
-        }
-
-        // Avg depth (meters)
-        var avgdepth: Double = 0
-        if dc_parser_get_field(parser, DC_FIELD_AVGDEPTH, 0, &avgdepth) == DC_STATUS_SUCCESS {
-            diveEvent["avgDepth"] = avgdepth
-        }
-
-        // Temperature (minimum)
-        var minTemp: Double = 0
-        if dc_parser_get_field(parser, DC_FIELD_TEMPERATURE_MINIMUM, 0, &minTemp) == DC_STATUS_SUCCESS {
-            diveEvent["minTemperature"] = minTemp
-        }
-
-        // Temperature (maximum)
-        var maxTemp: Double = 0
-        if dc_parser_get_field(parser, DC_FIELD_TEMPERATURE_MAXIMUM, 0, &maxTemp) == DC_STATUS_SUCCESS {
-            diveEvent["maxTemperature"] = maxTemp
-        }
-
-        // Surface temperature
-        var surfTemp: Double = 0
-        if dc_parser_get_field(parser, DC_FIELD_TEMPERATURE_SURFACE, 0, &surfTemp) == DC_STATUS_SUCCESS {
-            diveEvent["surfaceTemperature"] = surfTemp
-        }
-
-        // Dive mode
-        var divemode = DC_DIVEMODE_OC
-        if dc_parser_get_field(parser, DC_FIELD_DIVEMODE, 0, &divemode) == DC_STATUS_SUCCESS {
-            let modeStr: String
-            switch divemode {
-            case DC_DIVEMODE_FREEDIVE: modeStr = "freedive"
-            case DC_DIVEMODE_GAUGE:    modeStr = "gauge"
-            case DC_DIVEMODE_OC:       modeStr = "OC"
-            case DC_DIVEMODE_CCR:      modeStr = "CCR"
-            case DC_DIVEMODE_SCR:      modeStr = "SCR"
-            default:                   modeStr = "unknown"
-            }
-            diveEvent["diveMode"] = modeStr
-        }
-
-        // Atmospheric pressure
-        var atmospheric: Double = 0
-        if dc_parser_get_field(parser, DC_FIELD_ATMOSPHERIC, 0, &atmospheric) == DC_STATUS_SUCCESS {
-            diveEvent["atmospheric"] = atmospheric
-        }
-
-        // Gas mixes
-        var gasmixCount: UInt32 = 0
-        if dc_parser_get_field(parser, DC_FIELD_GASMIX_COUNT, 0, &gasmixCount) == DC_STATUS_SUCCESS,
-           gasmixCount > 0 {
-            var mixes: [[String: Any]] = []
-            for i in 0..<gasmixCount {
-                var gasmix = dc_gasmix_t()
-                if dc_parser_get_field(parser, DC_FIELD_GASMIX, i, &gasmix) == DC_STATUS_SUCCESS {
-                    mixes.append([
-                        "oxygen": gasmix.oxygen,
-                        "helium": gasmix.helium,
-                        "nitrogen": gasmix.nitrogen,
-                    ])
-                }
-            }
-            if !mixes.isEmpty {
-                diveEvent["gasMixes"] = mixes
-            }
-        }
-
-        // Tank info
-        var tankCount: UInt32 = 0
-        if dc_parser_get_field(parser, DC_FIELD_TANK_COUNT, 0, &tankCount) == DC_STATUS_SUCCESS,
-           tankCount > 0 {
-            var tanks: [[String: Any]] = []
-            for i in 0..<tankCount {
-                var tank = dc_tank_t()
-                if dc_parser_get_field(parser, DC_FIELD_TANK, i, &tank) == DC_STATUS_SUCCESS {
-                    var tankMap: [String: Any] = [
-                        "beginPressure": tank.beginpressure,
-                        "endPressure": tank.endpressure,
-                    ]
-                    if tank.volume > 0 {
-                        tankMap["volume"] = tank.volume
-                    }
-                    if tank.workpressure > 0 {
-                        tankMap["workPressure"] = tank.workpressure
-                    }
-                    if tank.gasmix != DC_GASMIX_UNKNOWN {
-                        tankMap["gasmix"] = Int(tank.gasmix)
-                    }
-                    tanks.append(tankMap)
-                }
-            }
-            if !tanks.isEmpty {
-                diveEvent["tanks"] = tanks
-            }
-        }
-
-        // Depth profile samples — parsed and stored in memory for later retrieval
-        let sampleCollector = SampleCollector()
-        let samplePtr = Unmanaged.passUnretained(sampleCollector).toOpaque()
-        dc_parser_samples_foreach(parser, sampleCallback, samplePtr)
-        sampleCollector.flush()
-
-        if !sampleCollector.samples.isEmpty {
-            diveEvent["samples"] = sampleCollector.samples
-            diveEvent["sampleCount"] = sampleCollector.samples.count
-        }
-
-        // Fingerprint
-        if let fp = fingerprint, fpSize > 0 {
-            let fpData = Data(bytes: fp, count: Int(fpSize))
-            diveEvent["fingerprint"] = fpData.map { String(format: "%02x", $0) }.joined()
-        }
-
-        NSLog("[DiveDownloader] Dive #\(diveNumber)\(total != nil ? "/\(total!)" : ""): " +
-              "depth=\(diveEvent["maxDepth"] ?? "?")m, " +
-              "time=\(diveEvent["diveTime"] ?? "?")s, samples=\(sampleCollector.samples.count)")
-
-        // Store in memory — NO dispatch to main queue
-        _downloadedDives.append(diveEvent)
-        return true
     }
 }
 
@@ -510,8 +551,9 @@ private let diveCallback: @convention(c)
     guard let userdata = userdata, let data = data, size > 0 else { return 1 }
     let downloader = Unmanaged<DiveDownloader>.fromOpaque(userdata).takeUnretainedValue()
 
-    let shouldContinue = downloader.processDive(data: data, size: size,
-                                                 fingerprint: fingerprint, fpSize: fpSize)
+    // Store raw bytes only — NO parsing during BLE transfer
+    let shouldContinue = downloader.storeRawDive(data: data, size: size,
+                                                  fingerprint: fingerprint, fpSize: fpSize)
     return shouldContinue ? 1 : 0
 }
 

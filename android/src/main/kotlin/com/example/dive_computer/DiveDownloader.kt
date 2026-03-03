@@ -5,15 +5,23 @@ import android.util.Log
 import java.util.concurrent.locks.ReentrantLock
 
 /**
+ * Raw dive data stored during BLE download, parsed after transfer completes.
+ */
+private data class RawDiveData(
+    val data: ByteArray,
+    val fingerprint: ByteArray?
+)
+
+/**
  * Manages the dive download process using libdivecomputer's
  * dc_device_foreach and dc_parser APIs via JNI.
  *
  * Design (matching iOS/Subsurface):
- * - All BLE and parsing work happens on a background thread
+ * - All BLE work happens on a background thread with NO parsing
+ * - Raw dive bytes are stored in memory during download
+ * - Parsing happens AFTER dc_device_foreach completes (BLE is done)
  * - Progress is written to shared properties (no main-thread dispatches)
  * - The UI polls progress via MethodChannel timer
- * - Full dive data is stored in memory and retrieved after download completes
- * - This eliminates all main-thread work during BLE communication
  */
 class DiveDownloader(
     private val context: Context,
@@ -47,7 +55,10 @@ class DiveDownloader(
     @Volatile private var isActive: Boolean = true
     @Volatile private var status: String? = null
 
-    /** Full parsed dive data, accumulated during download. */
+    /** Raw dive data accumulated during BLE download (pre-parsing). */
+    private val rawDives = mutableListOf<RawDiveData>()
+
+    /** Full parsed dive data, populated after download completes. */
     private val downloadedDives = mutableListOf<Map<String, Any?>>()
 
     @Volatile private var _isCancelled = false
@@ -109,6 +120,7 @@ class DiveDownloader(
     private fun runDownload() {
         // nativeStartDownload blocks until all dives are enumerated.
         // The JNI bridge calls our callback methods during execution.
+        // Callbacks store raw bytes only — NO parsing during BLE transfer.
         val statusCode = nativeStartDownload(devicePtr)
 
         val statusName = when (statusCode) {
@@ -117,7 +129,12 @@ class DiveDownloader(
             else              -> "error($statusCode)"
         }
 
-        Log.i(TAG, "Download complete: $statusName, $diveCount dives")
+        Log.i(TAG, "BLE transfer complete: $statusName, ${rawDives.size} dives received. Parsing...")
+
+        // Parse all dives AFTER BLE transfer is complete
+        parseAllDives()
+
+        Log.i(TAG, "Parsing complete: ${downloadedDives.size} dives parsed")
 
         stateLock.lock()
         try {
@@ -125,6 +142,49 @@ class DiveDownloader(
             status = statusName
         } finally {
             stateLock.unlock()
+        }
+    }
+
+    // ── Deferred Parsing (runs after BLE transfer completes) ────────────────
+
+    private fun parseAllDives() {
+        for ((index, rawDive) in rawDives.withIndex()) {
+            val diveNumber = index + 1
+
+            val parsedDive = nativeParseDive(devicePtr, rawDive.data)
+            if (parsedDive != null) {
+                parsedDive["number"] = diveNumber
+
+                // Add fingerprint hex string
+                if (rawDive.fingerprint != null && rawDive.fingerprint.isNotEmpty()) {
+                    parsedDive["fingerprint"] = rawDive.fingerprint.joinToString("") {
+                        String.format("%02x", it)
+                    }
+                }
+
+                Log.i(TAG, "Parsed dive #$diveNumber: " +
+                    "depth=${parsedDive["maxDepth"]}m, " +
+                    "time=${parsedDive["diveTime"]}s, " +
+                    "samples=${parsedDive["sampleCount"]}")
+
+                stateLock.lock()
+                try {
+                    downloadedDives.add(parsedDive)
+                } finally {
+                    stateLock.unlock()
+                }
+            } else {
+                Log.w(TAG, "Failed to parse dive #$diveNumber")
+                stateLock.lock()
+                try {
+                    downloadedDives.add(mapOf(
+                        "number" to diveNumber,
+                        "error" to "Parser creation failed"
+                    ))
+                } finally {
+                    stateLock.unlock()
+                }
+            }
         }
     }
 
@@ -171,6 +231,7 @@ class DiveDownloader(
 
     /**
      * Called by JNI for each dive found during enumeration.
+     * Stores raw bytes only — NO parsing during BLE transfer.
      * Returns true to continue, false to stop.
      */
     @Suppress("unused") // Called from JNI
@@ -209,31 +270,10 @@ class DiveDownloader(
             }
         }
 
-        // Parse the dive data via JNI (uses dc_parser on the current background thread)
-        val parsedDive = nativeParseDive(devicePtr, diveData)
-        if (parsedDive != null) {
-            // Add fingerprint hex string
-            if (fingerprint != null && fingerprint.isNotEmpty()) {
-                parsedDive["fingerprint"] = fingerprint.joinToString("") {
-                    String.format("%02x", it)
-                }
-            }
+        // Store raw bytes only — parsing deferred until after BLE transfer
+        rawDives.add(RawDiveData(diveData.copyOf(), fingerprint?.copyOf()))
 
-            Log.i(TAG, "Dive #$currentDiveNumber: " +
-                "depth=${parsedDive["maxDepth"]}m, " +
-                "time=${parsedDive["diveTime"]}s, " +
-                "samples=${parsedDive["sampleCount"]}")
-
-            stateLock.lock()
-            try {
-                downloadedDives.add(parsedDive)
-            } finally {
-                stateLock.unlock()
-            }
-        } else {
-            Log.w(TAG, "Failed to parse dive #$currentDiveNumber")
-        }
-
+        Log.i(TAG, "Stored raw dive #$currentDiveNumber (${diveData.size} bytes)")
         return true // Continue downloading
     }
 

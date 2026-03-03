@@ -85,6 +85,10 @@ class BleManager(
     // Cache of BLE-capable descriptors from libdivecomputer
     private val bleDescriptors = mutableListOf<DescriptorInfo>()
 
+    // Negotiated MTU (updated from GATT callback, used by BleTransport)
+    var negotiatedMtu: Int = 23
+        private set
+
     // Connection state
     var connectedGatt: BluetoothGatt? = null
         private set
@@ -272,6 +276,12 @@ class BleManager(
 
         override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
             Log.i(TAG, "MTU changed to $mtu (status=$status)")
+            negotiatedMtu = mtu
+
+            // Request high-priority connection interval (~7.5ms instead of ~30ms+)
+            // This dramatically improves BLE throughput on Android
+            gatt.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_HIGH)
+
             // Now discover services
             gatt.discoverServices()
         }

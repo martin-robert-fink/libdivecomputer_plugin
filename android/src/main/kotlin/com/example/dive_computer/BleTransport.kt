@@ -312,12 +312,12 @@ class BleTransport(
         val props = tx.properties
         val useResponse = props and BluetoothGattCharacteristic.PROPERTY_WRITE != 0
 
-        // Write in MTU-sized chunks
-        val mtu = 244 // Conservative default; could track from MTU callback
+        // Use actual negotiated MTU minus 3 bytes ATT overhead
+        val maxPayload = maxOf(bleManager.negotiatedMtu - 3, 20)
         var offset = 0
 
         while (offset < data.size) {
-            val chunkSize = minOf(mtu, data.size - offset)
+            val chunkSize = minOf(maxPayload, data.size - offset)
             val chunk = data.copyOfRange(offset, offset + chunkSize)
 
             tx.value = chunk

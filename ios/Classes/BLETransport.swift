@@ -59,6 +59,7 @@ class BLETransport: NSObject {
     private var receivedPackets: [Data] = []
     private let packetLock = NSLock()
     fileprivate let packetAvailable = DispatchSemaphore(value: 0)
+    fileprivate let pollSemaphore = DispatchSemaphore(value: 0)
 
     // Write synchronization
     fileprivate let writeComplete = DispatchSemaphore(value: 0)
@@ -151,8 +152,9 @@ class BLETransport: NSObject {
         guard !isClosed else { return }
         isClosed = true
 
-        // Unblock any waiting reads
+        // Unblock any waiting reads/polls
         packetAvailable.signal()
+        pollSemaphore.signal()
 
         // Release the retained self
         if let unmanaged = unmanagedSelf {
@@ -171,7 +173,8 @@ class BLETransport: NSObject {
         packetLock.lock()
         receivedPackets.append(data)
         packetLock.unlock()
-        packetAvailable.signal()
+        packetAvailable.signal()  // for read()
+        pollSemaphore.signal()    // for poll()
     }
 
     /// Number of packets waiting in the queue.
@@ -212,7 +215,8 @@ class BLETransport: NSObject {
         clearPackets()
         // Drain any pending semaphore signals so reads block properly
         while packetAvailable.wait(timeout: .now()) == .success {}
-        NSLog("[BLETransport] Packet queue and semaphore reset for new operation")
+        while pollSemaphore.wait(timeout: .now()) == .success {}
+        NSLog("[BLETransport] Packet queue and semaphores reset for new operation")
     }
 }
 
@@ -377,12 +381,9 @@ private let bleConfigure: @convention(c) (UnsafeMutableRawPointer?, UInt32, UInt
     return DC_STATUS_SUCCESS
 }
 
-/// Poll: check if data is available WITHOUT consuming the semaphore.
-/// libdivecomputer calls poll() then read() — if poll consumed the signal,
-/// read() would have nothing to wait on and would time out.
-/// Poll: check if data is available using a spin-wait loop.
-/// Does NOT touch the semaphore — that is reserved for read().
-/// This matches Subsurface's WAITFOR approach.
+/// Poll: check if data is available using a dedicated semaphore.
+/// Does NOT touch the packetAvailable semaphore — that is reserved for read().
+/// This avoids the 10ms spin-wait sleep that was causing throughput issues.
 private let blePoll: @convention(c) (UnsafeMutableRawPointer?, Int32) -> dc_status_t = { userdata, timeout in
     guard let t = transport(from: userdata) else { return DC_STATUS_IO }
     if t.isClosed { return DC_STATUS_IO }
@@ -397,7 +398,7 @@ private let blePoll: @convention(c) (UnsafeMutableRawPointer?, Int32) -> dc_stat
         return t.packetCount > 0 ? DC_STATUS_SUCCESS : DC_STATUS_TIMEOUT
     }
 
-    // Spin-wait: check every 10ms until data arrives or timeout
+    // Wait on dedicated poll semaphore — no spin-wait, no sleep overhead
     let deadline: DispatchTime
     if timeoutMs < 0 {
         deadline = .distantFuture
@@ -405,20 +406,14 @@ private let blePoll: @convention(c) (UnsafeMutableRawPointer?, Int32) -> dc_stat
         deadline = .now() + .milliseconds(timeoutMs)
     }
 
-    while t.packetCount == 0 {
-        if t.isClosed { return DC_STATUS_IO }
-        if deadline != .distantFuture && DispatchTime.now() >= deadline {
-            return DC_STATUS_TIMEOUT
-        }
-        usleep(10_000) // 10ms
-    }
+    let result = t.pollSemaphore.wait(timeout: deadline)
+
+    if t.isClosed { return DC_STATUS_IO }
+    if result == .timedOut { return DC_STATUS_TIMEOUT }
 
     return DC_STATUS_SUCCESS
 }
 
-/// Packet-based read: returns exactly one BLE notification per call.
-/// This matches the Subsurface/libdivecomputer BLE transport contract where
-/// each read() returns one complete BLE packet, preserving framing boundaries.
 /// Packet-based read: returns exactly one BLE notification per call.
 /// This matches the Subsurface/libdivecomputer BLE transport contract where
 /// each read() returns one complete BLE packet, preserving framing boundaries.
@@ -583,6 +578,7 @@ private let bleSleep: @convention(c) (UnsafeMutableRawPointer?, UInt32) -> dc_st
 
 private let bleClose: @convention(c) (UnsafeMutableRawPointer?) -> dc_status_t = { userdata in
     guard let t = transport(from: userdata) else { return DC_STATUS_IO }
+
     t.close()
     return DC_STATUS_SUCCESS
 }
