@@ -3,7 +3,7 @@
 /// ## Quick start
 ///
 /// ```dart
-/// import 'package:dive_computer/dive_computer.dart';
+/// import 'package:libdivecomputer_plugin/libdivecomputer_plugin.dart';
 ///
 /// final plugin = DiveComputerPlugin.instance;
 ///
@@ -20,8 +20,8 @@
 /// ```
 library;
 
-export 'src/dive_computer_exception.dart';
-export 'src/dive_computer_plugin.dart';
+export 'src/libdivecomputer_exception.dart';
+export 'src/libdivecomputer_plugin.dart';
 export 'src/models/dc_device_info.dart';
 export 'src/models/dc_dive.dart';
 export 'src/models/dc_dive_computer.dart';

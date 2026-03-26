@@ -1,5 +1,5 @@
-name: dive_computer
-description: "A new Flutter plugin project."
+name: libdivecomputer_plugin
+description: "A plugin that wraps the libdivecomputer library for use in Flutter applications."
 version: 0.0.1
 homepage:
 
@@ -35,7 +35,7 @@ flutter:
   plugin:
     platforms:
       android:
-        package: com.example.dive_computer
+        package: com.example.libdivecomputer_plugin
         pluginClass: DiveComputerPlugin
       macos:
         pluginClass: DiveComputerPlugin

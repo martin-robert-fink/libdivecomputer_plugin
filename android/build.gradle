@@ -1,4 +1,4 @@
-group = "com.example.dive_computer"
+group = "com.example.libdivecomputer_plugin"
 version = "1.0"
 
 buildscript {
@@ -23,7 +23,7 @@ apply plugin: "com.android.library"
 apply plugin: "kotlin-android"
 
 android {
-    namespace = "com.example.dive_computer"
+    namespace = "com.example.libdivecomputer_plugin"
     compileSdk = 34
 
     compileOptions {

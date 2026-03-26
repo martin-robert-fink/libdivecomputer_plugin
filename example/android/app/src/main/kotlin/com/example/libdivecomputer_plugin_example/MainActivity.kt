@@ -1,4 +1,4 @@
-package com.example.dive_computer_example
+package com.example.libdivecomputer_plugin_example
 
 import io.flutter.embedding.android.FlutterActivity
 

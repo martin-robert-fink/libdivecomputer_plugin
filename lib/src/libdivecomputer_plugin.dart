@@ -1,6 +1,6 @@
 import 'package:flutter/services.dart';
 
-import 'dive_computer_exception.dart';
+import 'libdivecomputer_exception.dart';
 import 'models/dc_device_info.dart';
 import 'models/dc_dive.dart';
 import 'models/dc_dive_computer.dart';
@@ -51,11 +51,11 @@ class DiveComputerPlugin {
   static final DiveComputerPlugin instance = DiveComputerPlugin._();
 
   static const MethodChannel _channel = MethodChannel(
-    'com.example.dive_computer/methods',
+    'com.example.libdivecomputer_plugin/methods',
   );
 
   static const EventChannel _scanChannel = EventChannel(
-    'com.example.dive_computer/scan',
+    'com.example.libdivecomputer_plugin/scan',
   );
 
   // ---------------------------------------------------------------------------

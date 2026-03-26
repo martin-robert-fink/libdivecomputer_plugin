@@ -32,12 +32,12 @@ public class DiveComputerPlugin: NSObject, FlutterPlugin {
 
     public static func register(with registrar: FlutterPluginRegistrar) {
         let methodChannel = FlutterMethodChannel(
-            name: "com.example.dive_computer/methods",
+            name: "com.example.libdivecomputer_plugin/methods",
             binaryMessenger: registrar.messenger()
         )
 
         let scanChannel = FlutterEventChannel(
-            name: "com.example.dive_computer/scan",
+            name: "com.example.libdivecomputer_plugin/scan",
             binaryMessenger: registrar.messenger()
         )
 

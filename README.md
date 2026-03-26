@@ -1,4 +1,4 @@
-# dive_computer
+# libdivecomputer_plugin
 
 A new Flutter plugin project.
 

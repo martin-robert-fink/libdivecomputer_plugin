@@ -1,21 +1,21 @@
 PODS:
-  - dive_computer (0.0.1):
-    - FlutterMacOS
   - FlutterMacOS (1.0.0)
+  - libdivecomputer_plugin (0.0.1):
+    - FlutterMacOS
 
 DEPENDENCIES:
-  - dive_computer (from `Flutter/ephemeral/.symlinks/plugins/dive_computer/macos`)
   - FlutterMacOS (from `Flutter/ephemeral`)
+  - libdivecomputer_plugin (from `Flutter/ephemeral/.symlinks/plugins/libdivecomputer_plugin/macos`)
 
 EXTERNAL SOURCES:
-  dive_computer:
-    :path: Flutter/ephemeral/.symlinks/plugins/dive_computer/macos
   FlutterMacOS:
     :path: Flutter/ephemeral
+  libdivecomputer_plugin:
+    :path: Flutter/ephemeral/.symlinks/plugins/libdivecomputer_plugin/macos
 
 SPEC CHECKSUMS:
-  dive_computer: 3a0dd22222d1ff5f91e0c6f1c911b853940e036c
   FlutterMacOS: d0db08ddef1a9af05a5ec4b724367152bb0500b1
+  libdivecomputer_plugin: 1a86e41545f748e0766d94cfda6ada27dfdf110e
 
 PODFILE CHECKSUM: 54d867c82ac51cbd61b565781b9fada492027009
 

@@ -1,5 +1,5 @@
 Pod::Spec.new do |s|
-  s.name             = 'dive_computer'
+  s.name             = 'libdivecomputer_plugin'
   s.version          = '0.0.1'
   s.summary          = 'Flutter plugin wrapping libdivecomputer.'
   s.description      = <<-DESC
@@ -7,7 +7,7 @@ A Flutter plugin that provides native communication with dive computers
 using the libdivecomputer library. Uses CoreBluetooth for BLE transport
 on iOS.
                        DESC
-  s.homepage         = 'https://github.com/martin-robert-fink/dive_computer'
+  s.homepage         = 'https://github.com/martin-robert-fink/libdivecomputer_plugin'
   s.license          = { :file => '../LICENSE' }
   s.author           = { 'Your Name' => 'your@email.com' }
   s.source           = { :path => '.' }
@@ -26,5 +26,5 @@ s.pod_target_xcconfig = {
   s.swift_version    = '5.0'
   s.frameworks       = ['CoreBluetooth', 'Foundation']
 
-  s.resource_bundles = {'dive_computer_privacy' => ['Resources/PrivacyInfo.xcprivacy']}
+  s.resource_bundles = {'libdivecomputer_plugin_privacy' => ['Resources/PrivacyInfo.xcprivacy']}
 end

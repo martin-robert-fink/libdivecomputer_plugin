@@ -5,7 +5,7 @@
 import FlutterMacOS
 import Foundation
 
-import dive_computer
+import libdivecomputer_plugin
 
 func RegisterGeneratedPlugins(registry: FlutterPluginRegistry) {
   DiveComputerPlugin.register(with: registry.registrar(forPlugin: "DiveComputerPlugin"))

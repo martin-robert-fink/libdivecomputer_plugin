@@ -30,7 +30,7 @@
 #include <libdivecomputer/custom.h>
 #include <libdivecomputer/version.h>
 
-#define TAG "DiveComputer-JNI"
+#define TAG "libdivecomputer_plugin-JNI"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  TAG, __VA_ARGS__)
 #define LOGW(...) __android_log_print(ANDROID_LOG_WARN,  TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
@@ -68,7 +68,7 @@ static void detachIfNeeded(bool attached) {
 
 JNIEXPORT jint JNI_OnLoad(JavaVM *vm, void * /*reserved*/) {
     g_jvm = vm;
-    LOGI("JNI_OnLoad: dive_computer_jni loaded");
+    LOGI("JNI_OnLoad: libdivecomputer_plugin_jni loaded");
     return JNI_VERSION_1_6;
 }
 
@@ -412,7 +412,7 @@ static int download_dive_callback(const unsigned char *data, unsigned int size,
 // ---------------------------------------------------------------------------
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_com_example_dive_1computer_DiveComputerPlugin_nativeGetVersion(JNIEnv *env, jobject) {
+Java_com_example_libdivecomputer_1plugin_DiveComputerPlugin_nativeGetVersion(JNIEnv *env, jobject) {
     dc_version_t version;
     dc_version(&version);
     char buf[64];
@@ -422,7 +422,7 @@ Java_com_example_dive_1computer_DiveComputerPlugin_nativeGetVersion(JNIEnv *env,
 }
 
 extern "C" JNIEXPORT jobjectArray JNICALL
-Java_com_example_dive_1computer_DiveComputerPlugin_nativeGetDescriptors(JNIEnv *env, jobject) {
+Java_com_example_libdivecomputer_1plugin_DiveComputerPlugin_nativeGetDescriptors(JNIEnv *env, jobject) {
     // First pass: count descriptors
     dc_iterator_t *iterator = nullptr;
     dc_descriptor_t *descriptor = nullptr;
@@ -510,7 +510,7 @@ static void logfunc_callback(dc_context_t * /*context*/, dc_loglevel_t loglevel,
 }
 
 extern "C" JNIEXPORT jlong JNICALL
-Java_com_example_dive_1computer_DiveComputerPlugin_nativeCreateContext(JNIEnv *, jobject) {
+Java_com_example_libdivecomputer_1plugin_DiveComputerPlugin_nativeCreateContext(JNIEnv *, jobject) {
     dc_context_t *context = nullptr;
     dc_status_t status = dc_context_new(&context);
     if (status != DC_STATUS_SUCCESS || !context) {
@@ -524,7 +524,7 @@ Java_com_example_dive_1computer_DiveComputerPlugin_nativeCreateContext(JNIEnv *,
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_example_dive_1computer_DiveComputerPlugin_nativeFreeContext(JNIEnv *, jobject, jlong ptr) {
+Java_com_example_libdivecomputer_1plugin_DiveComputerPlugin_nativeFreeContext(JNIEnv *, jobject, jlong ptr) {
     if (ptr) {
         dc_context_free(reinterpret_cast<dc_context_t*>(ptr));
         LOGI("dc_context freed");
@@ -536,7 +536,7 @@ Java_com_example_dive_1computer_DiveComputerPlugin_nativeFreeContext(JNIEnv *, j
 // ---------------------------------------------------------------------------
 
 extern "C" JNIEXPORT jlong JNICALL
-Java_com_example_dive_1computer_BleTransport_nativeCreateIostream(
+Java_com_example_libdivecomputer_1plugin_BleTransport_nativeCreateIostream(
         JNIEnv *env, jobject thiz, jlong contextPtr) {
     dc_context_t *context = reinterpret_cast<dc_context_t*>(contextPtr);
 
@@ -593,7 +593,7 @@ Java_com_example_dive_1computer_BleTransport_nativeCreateIostream(
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_example_dive_1computer_BleTransport_nativeCloseIostream(
+Java_com_example_libdivecomputer_1plugin_BleTransport_nativeCloseIostream(
         JNIEnv *, jobject, jlong ptr) {
     if (ptr) {
         dc_iostream_close(reinterpret_cast<dc_iostream_t*>(ptr));
@@ -610,7 +610,7 @@ Java_com_example_dive_1computer_BleTransport_nativeCloseIostream(
  * Returns the device pointer (as jlong) or 0 on failure.
  */
 extern "C" JNIEXPORT jlong JNICALL
-Java_com_example_dive_1computer_DiveComputerPlugin_nativeOpenDevice(
+Java_com_example_libdivecomputer_1plugin_DiveComputerPlugin_nativeOpenDevice(
         JNIEnv *, jobject, jlong contextPtr, jint family, jint model, jlong iostreamPtr) {
     dc_context_t *context    = reinterpret_cast<dc_context_t*>(contextPtr);
     dc_iostream_t *iostream  = reinterpret_cast<dc_iostream_t*>(iostreamPtr);
@@ -651,7 +651,7 @@ Java_com_example_dive_1computer_DiveComputerPlugin_nativeOpenDevice(
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_example_dive_1computer_DiveComputerPlugin_nativeCloseDevice(
+Java_com_example_libdivecomputer_1plugin_DiveComputerPlugin_nativeCloseDevice(
         JNIEnv *, jobject, jlong ptr) {
     if (ptr) {
         dc_device_close(reinterpret_cast<dc_device_t*>(ptr));
@@ -664,7 +664,7 @@ Java_com_example_dive_1computer_DiveComputerPlugin_nativeCloseDevice(
 // ---------------------------------------------------------------------------
 
 extern "C" JNIEXPORT jint JNICALL
-Java_com_example_dive_1computer_DiveDownloader_nativeSetFingerprint(
+Java_com_example_libdivecomputer_1plugin_DiveDownloader_nativeSetFingerprint(
         JNIEnv *env, jobject, jlong devicePtr, jbyteArray fingerprint) {
     dc_device_t *device = reinterpret_cast<dc_device_t*>(devicePtr);
     if (!device || !fingerprint) return (jint)DC_STATUS_INVALIDARGS;
@@ -685,7 +685,7 @@ Java_com_example_dive_1computer_DiveDownloader_nativeSetFingerprint(
 // ---------------------------------------------------------------------------
 
 extern "C" JNIEXPORT jint JNICALL
-Java_com_example_dive_1computer_DiveDownloader_nativeStartDownload(
+Java_com_example_libdivecomputer_1plugin_DiveDownloader_nativeStartDownload(
         JNIEnv *env, jobject thiz, jlong devicePtr) {
     dc_device_t *device = reinterpret_cast<dc_device_t*>(devicePtr);
     if (!device) return (jint)DC_STATUS_INVALIDARGS;
@@ -744,7 +744,7 @@ struct ParserUserdata {
 };
 
 extern "C" JNIEXPORT jobject JNICALL
-Java_com_example_dive_1computer_DiveDownloader_nativeParseDive(
+Java_com_example_libdivecomputer_1plugin_DiveDownloader_nativeParseDive(
         JNIEnv *env, jobject, jlong devicePtr, jbyteArray diveData) {
     dc_device_t *device = reinterpret_cast<dc_device_t*>(devicePtr);
     if (!device || !diveData) return nullptr;

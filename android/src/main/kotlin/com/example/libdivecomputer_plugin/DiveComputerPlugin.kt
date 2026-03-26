@@ -1,4 +1,4 @@
-package com.example.dive_computer
+package com.example.libdivecomputer_plugin
 
 import android.bluetooth.BluetoothDevice
 import android.content.Context
@@ -25,7 +25,7 @@ class DiveComputerPlugin : FlutterPlugin, MethodCallHandler {
 
         init {
             // libdivecomputer is statically linked into dive_computer_jni
-            System.loadLibrary("dive_computer_jni")
+            System.loadLibrary("libdivecomputer_plugin_jni")
         }
     }
 
@@ -57,13 +57,13 @@ class DiveComputerPlugin : FlutterPlugin, MethodCallHandler {
 
         methodChannel = MethodChannel(
             binding.binaryMessenger,
-            "com.example.dive_computer/methods"
+            "com.example.libdivecomputer_plugin/methods"
         )
         methodChannel.setMethodCallHandler(this)
 
         scanEventChannel = EventChannel(
             binding.binaryMessenger,
-            "com.example.dive_computer/scan"
+            "com.example.libdivecomputer_plugin/scan"
         )
         scanEventChannel.setStreamHandler(ScanStreamHandler())
 

@@ -1,5 +1,5 @@
 Pod::Spec.new do |s|
-  s.name             = 'dive_computer'
+  s.name             = 'libdivecomputer_plugin'
   s.version          = '0.0.1'
   s.summary          = 'Flutter plugin wrapping libdivecomputer.'
   s.description      = <<-DESC

@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:io' show Platform;
 import 'package:flutter/material.dart';
-import 'package:dive_computer/dive_computer.dart';
+import 'package:libdivecomputer_plugin/libdivecomputer_plugin.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 void main() {

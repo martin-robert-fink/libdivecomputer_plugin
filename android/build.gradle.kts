@@ -1,4 +1,4 @@
-group = "com.example.dive_computer"
+group = "com.example.libdivecomputer_plugin"
 version = "1.0-SNAPSHOT"
 
 buildscript {
@@ -27,7 +27,7 @@ plugins {
 }
 
 android {
-    namespace = "com.example.dive_computer"
+    namespace = "com.example.libdivecomputer_plugin"
 
     compileSdk = 36
 
